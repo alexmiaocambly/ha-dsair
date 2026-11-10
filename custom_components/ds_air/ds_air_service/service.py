@@ -12,6 +12,8 @@ from .dao import (
     STATUS_ATTR,
     AirCon,
     AirConStatus,
+    FloorHeater,
+    FloorHeaterStatus,
     HD,
     HDStatus,
     Room,
@@ -27,6 +29,7 @@ from .display import display
 from .param import (
     AirConControlParam,
     AirConQueryStatusParam,
+    FloorHeaterQueryParam,
     HandShakeParam,
     HeartbeatParam,
     Param,
@@ -39,6 +42,7 @@ from .param import (
 _LOGGER = logging.getLogger(__name__)
 INIT_TIMEOUT_SECONDS = 60.0
 SOCKET_TIMEOUT_SECONDS = 5.0
+FLOOR_HEATER_QUERY_TIMEOUT_SECONDS = 3.0
 CONNECT_RETRY_INTERVAL_SECONDS = 3.0
 
 
@@ -244,6 +248,8 @@ class Service:
         self._sensor_hook: list[(str, Callable)] = []
         self._vent_hook: list[(Ventilation, Callable)] = []
         self._hd_hook: list[(HD, Callable)] = []
+        self._floor_heaters: list[FloorHeater] | None = None
+        self._floor_heater_hook: list[(FloorHeater, Callable)] = []
         self._heartbeat_thread = None
         self._sensors: list[Sensor] = []
         self._scan_interval: int = 5
@@ -316,6 +322,7 @@ class Service:
                             i.alias = j.alias
                             if i.unit_id:
                                 i.alias += str(i.unit_id)
+            self._query_floor_heaters(deadline)
             self._ready = True
         except Exception:
             self.destroy()
@@ -334,6 +341,8 @@ class Service:
         self._bathrooms = None
         self._ventilations = None
         self._hds = None
+        self._floor_heaters = None
+        self._floor_heater_hook = []
         self._none_stat_dev_cnt = 0
         self._status_hook = []
         self._sensor_hook = []
@@ -363,6 +372,14 @@ class Service:
         if self._hds is None:
             return []
         return self._hds
+
+    def get_floor_heaters(self) -> list[FloorHeater]:
+        """获取所有分房间地暖温控器"""
+        return self._floor_heaters or []
+
+    def register_floor_heater_hook(self, device: FloorHeater, hook: Callable):
+        """注册地暖温控器状态钩子（状态变了就调，不带参数）"""
+        self._floor_heater_hook.append((device, hook))
 
     def control(self, aircon: AirCon, status: AirConStatus):
         p = AirConControlParam(aircon, status)
@@ -488,6 +505,8 @@ class Service:
                 p = HDQueryStatusParam()
                 p.device = hd
                 self.send_msg(p)
+        if self._floor_heaters:
+            self.send_msg(FloorHeaterQueryParam())
         p = Sensor2InfoParam()
         self.send_msg(p)
 
@@ -578,3 +597,42 @@ class Service:
                 except Exception as e:
                     _log("hd hook error!!")
                     _log(str(e))
+
+    # 分房间地暖温控器相关方法
+
+    def _query_floor_heaters(self, deadline: float | None) -> None:
+        """启动时查一次温控器列表。房间信息里没有它们；没装这种温控器的网关不会回，等一小会儿就当没有。"""
+        self._socket_client.send(FloorHeaterQueryParam(), deadline)
+        end = time.monotonic() + FLOOR_HEATER_QUERY_TIMEOUT_SECONDS
+        if deadline is not None:
+            end = min(end, deadline)
+        while self._floor_heaters is None and time.monotonic() < end:
+            time.sleep(0.1)
+        if self._floor_heaters is None:
+            self._floor_heaters = []
+
+    def set_floor_heaters(self, heaters: list[FloorHeater]):
+        """网关回了温控器列表：第一次用来建设备，之后（轮询）只更新状态。"""
+        if self._floor_heaters is None:
+            for heater in heaters:
+                for room in self._rooms or []:
+                    if room.id == heater.room_id:
+                        heater.alias = room.alias
+            self._floor_heaters = heaters
+            return
+        for heater in heaters:
+            self.update_floor_heater(heater.mac, heater.status)
+
+    def update_floor_heater(self, mac: str, status: FloorHeaterStatus):
+        """更新一台温控器的状态并通知实体。"""
+        for heater in self._floor_heaters or []:
+            if heater.mac != mac:
+                continue
+            heater.status.merge(status)
+            for device, func in self._floor_heater_hook:
+                if device.mac == mac:
+                    try:
+                        func()
+                    except Exception as e:
+                        _log("floor heater hook error!!")
+                        _log(str(e))

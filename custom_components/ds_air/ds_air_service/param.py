@@ -448,3 +448,18 @@ class HDBaseControlParam(HDParam):
                 s.write1(val)
             elif bit == 2:
                 s.write2(val)
+
+
+# 分房间地暖温控器（设备类型 10/52）
+
+
+class FloorHeaterQueryParam(Param):
+    """查询全部地暖温控器的状态：子体一个字节 0xFF = 全部（也可以给房间号查单个）。"""
+
+    def __init__(self, room_id: int = 0xFF):
+        super().__init__(EnumDevice.FLOOR_HEATER, EnumCmdType.QUERY_STATUS, True)
+        self.subbody_ver = 0
+        self._room_id = room_id
+
+    def generate_subbody(self, s: Encode, config: Config) -> None:
+        s.write1(self._room_id)

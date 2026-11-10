@@ -188,6 +188,8 @@ class EnumDevice(Enum):
     MESHID_RA = (12, 34)
     SECURITY_MONITOR = (8, 49)
     SMART_HCHO = (8, 50)
+    # 分房间地暖温控器：独立的 Wi-Fi 设备，由网关转发（实测 DTA117D611）
+    FLOOR_HEATER = (10, 52)
 
 
 class EnumFanDirection(IntEnum):

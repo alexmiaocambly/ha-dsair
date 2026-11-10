@@ -29,6 +29,7 @@ from homeassistant.const import (
     UnitOfTemperature,
 )
 from homeassistant.core import Event, HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -47,7 +48,7 @@ from .const import (
     get_mode_name,
 )
 from .ds_air_service import AirCon, AirConStatus, EnumControl, Service, display
-from .ds_air_service.dao import build_aircon_device_name
+from .ds_air_service.dao import FloorHeater, build_aircon_device_name
 
 _SUPPORT_FLAGS = (
     ClimateEntityFeature.TARGET_TEMPERATURE
@@ -77,6 +78,9 @@ async def async_setup_entry(
     service: Service = hass.data[DOMAIN][entry.entry_id]
     climates = [DsAir(service, aircon) for aircon in service.get_aircons()]
     async_add_entities(climates)
+    async_add_entities(
+        DsFloorHeater(service, heater) for heater in service.get_floor_heaters()
+    )
     link = entry.options.get("link")
     climate_by_unique_id = {climate.unique_id: climate for climate in climates}
     sensor_temp_map: dict[str, list[DsAir]] = {}
@@ -436,3 +440,77 @@ class DsAir(ClimateEntity):
         if aircon.relax_mode:
             flags |= ClimateEntityFeature.TARGET_HUMIDITY
         return flags
+
+
+class DsFloorHeater(ClimateEntity):
+    """分房间地暖温控器（独立的 Wi-Fi 温控器，经网关转发）。
+
+    目前只读：开关和设定温度能查询、能实时跟随推送；控制指令的格式还没弄清，调用控制会报错。
+    """
+
+    _attr_has_entity_name: bool = True
+    _attr_name: str | None = None
+    _attr_should_poll: bool = False
+
+    _attr_hvac_modes: list[HVACMode] = [HVACMode.HEAT, HVACMode.OFF]
+    _attr_max_temp: float = 35
+    _attr_min_temp: float = 5
+    _attr_precision: float = PRECISION_TENTHS
+    _attr_target_temperature_step: float | None = 0.5
+    _attr_temperature_unit: str = UnitOfTemperature.CELSIUS
+    _attr_supported_features: ClimateEntityFeature = (
+        ClimateEntityFeature.TARGET_TEMPERATURE
+    )
+
+    _enable_turn_on_off_backwards_compatibility: bool = False
+
+    def __init__(self, service: Service, heater: FloorHeater):
+        _log("create floor heater:")
+        _log(str(heater.__dict__))
+        self.service = service
+        self._device_info = heater
+        self._attr_unique_id = heater.unique_id
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, heater.unique_id)},
+            name=f"{heater.alias} 地暖" if heater.alias else f"地暖 {heater.mac}",
+            manufacturer=MANUFACTURER,
+            model="地暖温控器",
+        )
+        service.register_floor_heater_hook(heater, self._status_change_hook)
+
+    def _status_change_hook(self) -> None:
+        # 在收网关数据的线程里调用，只能用线程安全的写法；实体还没加进 HA 时先不写
+        if self.hass is not None:
+            self.schedule_update_ha_state()
+
+    @property
+    def available(self) -> bool:
+        return self._device_info.status.online is not False
+
+    @property
+    def hvac_mode(self) -> HVACMode | None:
+        switch = self._device_info.status.switch
+        if switch is None:
+            return None
+        return HVACMode.HEAT if switch else HVACMode.OFF
+
+    @property
+    def target_temperature(self) -> float | None:
+        return self._device_info.status.setted_temp
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        status = self._device_info.status
+        return {
+            "mac": self._device_info.mac,
+            "raw_tags": {str(k): v for k, v in sorted(status.raw.items())},
+        }
+
+    def _not_supported(self) -> None:
+        raise HomeAssistantError("分房间地暖目前只能查看：控制指令的格式还没弄清")
+
+    def set_hvac_mode(self, hvac_mode: HVACMode) -> None:
+        self._not_supported()
+
+    def set_temperature(self, **kwargs) -> None:
+        self._not_supported()

@@ -24,6 +24,8 @@ from .dao import (
     AirCon,
     AirConStatus,
     Device,
+    FloorHeater,
+    FloorHeaterStatus,
     Geothermic,
     Room,
     Sensor,
@@ -165,6 +167,14 @@ def result_factory(data: tuple, config: Config):
             result = HDStatusChangeResult(cnt, device)
         elif cmd_type == EnumCmdType.NEW_HD_NIGHT_ENERGY_SETTING.value:
             result = HDControlOtherResult(cnt, device)
+        else:
+            result = UnknownResult(cnt, device, cmd_type)
+    elif dev_id == EnumDevice.FLOOR_HEATER.value[1]:
+        device = EnumDevice.FLOOR_HEATER
+        if cmd_type == EnumCmdType.QUERY_STATUS.value:
+            result = FloorHeaterQueryResult(cnt, device)
+        elif cmd_type == FLOOR_HEATER_NOTIFY_CMD:
+            result = FloorHeaterNotifyResult(cnt, device)
         else:
             result = UnknownResult(cnt, device, cmd_type)
     else:
@@ -1348,3 +1358,75 @@ class HDControlOtherResult(BaseResult):
 
     def do(self, service: Service) -> None:
         service.update_hd(self._room, self._unit, status=self._status)
+
+
+# 分房间地暖温控器（设备类型 10/52）相关的 Result 类
+
+# 网关主动推送状态变化用的指令号（和普通设备的 STATUS_CHANGED = 2 不一样）
+FLOOR_HEATER_NOTIFY_CMD = 1
+
+
+def _read_floor_heater(d: Decode, config: Config) -> FloorHeater:
+    """读一条温控器记录：房间号、1 字节（恒为 1，含义未知）、网卡地址、若干「标签-长度-值」、0 结束。"""
+    dev = FloorHeater(config)
+    dev.room_id = d.read1()
+    d.read1()
+    dev.mac = d.read(d.read1()).hex()
+    status = dev.status
+    tag = d.read1()
+    while tag != 0:
+        value = int.from_bytes(d.read(d.read1()), "little")
+        status.raw[tag] = value
+        if tag == 2:
+            status.online = value == 1
+        elif tag == 7:
+            status.switch = value == 1
+        elif tag == 8:
+            status.setted_temp = value / 10.0
+        tag = d.read1()
+    return dev
+
+
+class FloorHeaterQueryResult(BaseResult):
+    """地暖温控器状态查询结果：1 字节数量 + 每台一条记录。"""
+
+    def __init__(self, cmd_id: int, target: EnumDevice):
+        BaseResult.__init__(self, cmd_id, target, EnumCmdType.QUERY_STATUS)
+        self._heaters: list[FloorHeater] = []
+
+    def load_bytes(self, b: bytes, config: Config) -> None:
+        d = Decode(b)
+        try:
+            for _ in range(d.read1()):
+                self._heaters.append(_read_floor_heater(d, config))
+        except (struct.error, IndexError) as exc:
+            _LOGGER.debug("floor heater query result truncated: %s", exc)
+
+    def do(self, service: Service) -> None:
+        service.set_floor_heaters(self._heaters)
+
+    @property
+    def heaters(self):
+        return self._heaters
+
+
+class FloorHeaterNotifyResult(BaseResult):
+    """地暖温控器状态变化推送：一条记录，只带变了的那一项。"""
+
+    def __init__(self, cmd_id: int, target: EnumDevice):
+        BaseResult.__init__(self, cmd_id, target, EnumCmdType.STATUS_CHANGED)
+        self._heater: FloorHeater | None = None
+
+    def load_bytes(self, b: bytes, config: Config) -> None:
+        try:
+            self._heater = _read_floor_heater(Decode(b), config)
+        except (struct.error, IndexError) as exc:
+            _LOGGER.debug("floor heater notify truncated: %s", exc)
+
+    def do(self, service: Service) -> None:
+        if self._heater is not None:
+            service.update_floor_heater(self._heater.mac, self._heater.status)
+
+    @property
+    def heater(self):
+        return self._heater

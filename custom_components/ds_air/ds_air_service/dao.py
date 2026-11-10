@@ -155,6 +155,42 @@ class Geothermic(Device):
     """do nothing"""
 
 
+class FloorHeaterStatus:
+    """分房间地暖温控器的状态。网关用「标签-长度-值」上报，已弄清的标签：2 在线、7 开关、8 设定温度 ×10。"""
+
+    def __init__(self):
+        self.online: bool | None = None
+        self.switch: bool | None = None
+        self.setted_temp: float | None = None
+        # 全部标签的原始值（含还没弄清含义的 6、12、13），留着排查用
+        self.raw: dict[int, int] = {}
+
+    def merge(self, other: "FloorHeaterStatus") -> None:
+        """推送里只带变了的那一项，所以按字段合并。"""
+        if other.online is not None:
+            self.online = other.online
+        if other.switch is not None:
+            self.switch = other.switch
+        if other.setted_temp is not None:
+            self.setted_temp = other.setted_temp
+        self.raw.update(other.raw)
+
+
+class FloorHeater(Device):
+    """分房间地暖温控器（设备类型 10/52）。房间信息里没有它，要单独查询；用网卡地址区分。"""
+
+    def __init__(self, config: Config | None = None):
+        super().__init__()
+        if config:
+            self.config = config
+            self.gateway_id = config.gateway_id
+        self.status: FloorHeaterStatus = FloorHeaterStatus()
+
+    @property
+    def unique_id(self):
+        return f"daikin_{self.gateway_id}_floor_{self.mac}"
+
+
 class Ventilation(Device):
     def __init__(self, config: Config | None = None):
         super().__init__()
