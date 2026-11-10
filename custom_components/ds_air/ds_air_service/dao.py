@@ -156,13 +156,13 @@ class Geothermic(Device):
 
 
 class FloorHeaterStatus:
-    """分房间地暖温控器的状态。网关用「标签-长度-值」上报，已弄清的标签：2 在线、7 开关、8 设定温度 ×10。"""
+    """分房间地暖温控器的状态。网关用「标签-长度-值」上报：1 网卡地址、2 在线、7 开关、8 设定温度 ×10。"""
 
     def __init__(self):
         self.online: bool | None = None
         self.switch: bool | None = None
         self.setted_temp: float | None = None
-        # 全部标签的原始值（含还没弄清含义的 6、12、13），留着排查用
+        # 其余标签的原始值（6、12、13 等，官方 App 里也只是存着），留着排查用
         self.raw: dict[int, int] = {}
 
     def merge(self, other: "FloorHeaterStatus") -> None:
@@ -177,7 +177,11 @@ class FloorHeaterStatus:
 
 
 class FloorHeater(Device):
-    """分房间地暖温控器（设备类型 10/52）。房间信息里没有它，要单独查询；用网卡地址区分。"""
+    """分房间地暖温控器（设备类型 10/52）。房间信息里没有它，要单独查询；查询、控制都按房间号。"""
+
+    MIN_TEMP = 5.0
+    MAX_TEMP = 35.0
+    TEMP_STEP = 0.5
 
     def __init__(self, config: Config | None = None):
         super().__init__()

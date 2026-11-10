@@ -454,12 +454,35 @@ class HDBaseControlParam(HDParam):
 
 
 class FloorHeaterQueryParam(Param):
-    """查询全部地暖温控器的状态：子体一个字节 0xFF = 全部（也可以给房间号查单个）。"""
+    """查询地暖温控器的状态：子体是 4 字节整数，255 = 全部，也可以给房间号查单个。"""
 
-    def __init__(self, room_id: int = 0xFF):
-        super().__init__(EnumDevice.FLOOR_HEATER, EnumCmdType.QUERY_STATUS, True)
+    def __init__(self, room_id: int = 255):
+        super().__init__(EnumDevice.FLOOR_HEATER, EnumCmdType.FLOOR_HEATER_INFO, True)
         self.subbody_ver = 0
         self._room_id = room_id
 
     def generate_subbody(self, s: Encode, config: Config) -> None:
+        s.write4(self._room_id)
+
+
+class FloorHeaterControlParam(Param):
+    """控制一台地暖温控器：房间号 + 要改的项（7 开关 / 8 设定温度 ×10）+ 0 结束。不带网卡地址。"""
+
+    def __init__(self, room_id: int, switch: bool | None = None, temperature: float | None = None):
+        super().__init__(EnumDevice.FLOOR_HEATER, EnumCmdType.FLOOR_HEATER_STATUS_CONTROL, False)
+        self.subbody_ver = 0
+        self._room_id = room_id
+        self._switch = switch
+        self._temperature = temperature
+
+    def generate_subbody(self, s: Encode, config: Config) -> None:
         s.write1(self._room_id)
+        if self._switch is not None:
+            s.write1(7)
+            s.write1(1)
+            s.write1(1 if self._switch else 0)
+        if self._temperature is not None:
+            s.write1(8)
+            s.write1(2)
+            s.write2(int(round(self._temperature * 10)))
+        s.write1(0)

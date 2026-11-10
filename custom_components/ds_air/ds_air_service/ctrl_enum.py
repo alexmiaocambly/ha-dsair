@@ -27,6 +27,10 @@ class EnumCmdType(IntEnum):
     CONTROL = 1
     STATUS_CHANGED = 2
     QUERY_STATUS = 3
+    # 分集水器控制器（分房间地暖温控器，设备类型 10/52）的指令号和上面三个数值相同、含义不同
+    FLOOR_HEATER_STATUS_CHANGE = 1
+    FLOOR_HEATER_STATUS_CONTROL = 2
+    FLOOR_HEATER_INFO = 3
     AIR_RECOMMENDED_INDOOR_TEMP = 4
     AIR_CAPABILITY_QUERY = 6
     VAM_CAPABILITY_QUERY = 6
@@ -188,7 +192,7 @@ class EnumDevice(Enum):
     MESHID_RA = (12, 34)
     SECURITY_MONITOR = (8, 49)
     SMART_HCHO = (8, 50)
-    # 分房间地暖温控器：独立的 Wi-Fi 设备，由网关转发（实测 DTA117D611）
+    # 分房间地暖温控器（官方 App 里叫分集水器控制器 DWCollector）：独立的 Wi-Fi 设备，由网关转发
     FLOOR_HEATER = (10, 52)
 
 

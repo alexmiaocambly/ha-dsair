@@ -29,7 +29,6 @@ from homeassistant.const import (
     UnitOfTemperature,
 )
 from homeassistant.core import Event, HomeAssistant
-from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -57,6 +56,12 @@ _SUPPORT_FLAGS = (
 )
 if (MAJOR_VERSION, MINOR_VERSION) >= (2024, 2):
     _SUPPORT_FLAGS |= ClimateEntityFeature.TURN_ON | ClimateEntityFeature.TURN_OFF
+
+_FLOOR_HEATER_SUPPORT_FLAGS = ClimateEntityFeature.TARGET_TEMPERATURE
+if (MAJOR_VERSION, MINOR_VERSION) >= (2024, 2):
+    _FLOOR_HEATER_SUPPORT_FLAGS |= (
+        ClimateEntityFeature.TURN_ON | ClimateEntityFeature.TURN_OFF
+    )
 
 PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(
     {vol.Optional(CONF_HOST): cv.string, vol.Optional(CONF_PORT): cv.port}
@@ -445,7 +450,8 @@ class DsAir(ClimateEntity):
 class DsFloorHeater(ClimateEntity):
     """分房间地暖温控器（独立的 Wi-Fi 温控器，经网关转发）。
 
-    目前只读：开关和设定温度能查询、能实时跟随推送；控制指令的格式还没弄清，调用控制会报错。
+    只有开关和设定温度两项，温控器不上报室温。开任一房间时网关会自动把地暖模块（HD）打开，
+    全部关掉后模块不会自己关。
     """
 
     _attr_has_entity_name: bool = True
@@ -453,14 +459,12 @@ class DsFloorHeater(ClimateEntity):
     _attr_should_poll: bool = False
 
     _attr_hvac_modes: list[HVACMode] = [HVACMode.HEAT, HVACMode.OFF]
-    _attr_max_temp: float = 35
-    _attr_min_temp: float = 5
+    _attr_max_temp: float = FloorHeater.MAX_TEMP
+    _attr_min_temp: float = FloorHeater.MIN_TEMP
     _attr_precision: float = PRECISION_TENTHS
-    _attr_target_temperature_step: float | None = 0.5
+    _attr_target_temperature_step: float | None = FloorHeater.TEMP_STEP
     _attr_temperature_unit: str = UnitOfTemperature.CELSIUS
-    _attr_supported_features: ClimateEntityFeature = (
-        ClimateEntityFeature.TARGET_TEMPERATURE
-    )
+    _attr_supported_features: ClimateEntityFeature = _FLOOR_HEATER_SUPPORT_FLAGS
 
     _enable_turn_on_off_backwards_compatibility: bool = False
 
@@ -506,11 +510,30 @@ class DsFloorHeater(ClimateEntity):
             "raw_tags": {str(k): v for k, v in sorted(status.raw.items())},
         }
 
-    def _not_supported(self) -> None:
-        raise HomeAssistantError("分房间地暖目前只能查看：控制指令的格式还没弄清")
+    def _control(self, switch: bool | None = None, temperature: float | None = None) -> None:
+        """发控制指令，并先把本地状态改掉（网关随后会推送确认，推送和这里不一致时以推送为准）。"""
+        status = self._device_info.status
+        if switch is not None:
+            status.switch = switch
+        if temperature is not None:
+            status.setted_temp = temperature
+        self.service.control_floor_heater(self._device_info, switch, temperature)
+        self.schedule_update_ha_state()
 
     def set_hvac_mode(self, hvac_mode: HVACMode) -> None:
-        self._not_supported()
+        self._control(switch=hvac_mode != HVACMode.OFF)
+
+    def turn_on(self) -> None:
+        self._control(switch=True)
+
+    def turn_off(self) -> None:
+        self._control(switch=False)
 
     def set_temperature(self, **kwargs) -> None:
-        self._not_supported()
+        temperature = kwargs.get(ATTR_TEMPERATURE)
+        if temperature is None:
+            return
+        step = FloorHeater.TEMP_STEP
+        temperature = round(float(temperature) / step) * step
+        temperature = min(FloorHeater.MAX_TEMP, max(FloorHeater.MIN_TEMP, temperature))
+        self._control(temperature=temperature)

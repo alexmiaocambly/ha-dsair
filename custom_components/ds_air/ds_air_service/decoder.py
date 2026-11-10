@@ -171,7 +171,7 @@ def result_factory(data: tuple, config: Config):
             result = UnknownResult(cnt, device, cmd_type)
     elif dev_id == EnumDevice.FLOOR_HEATER.value[1]:
         device = EnumDevice.FLOOR_HEATER
-        if cmd_type == EnumCmdType.QUERY_STATUS.value:
+        if cmd_type == EnumCmdType.FLOOR_HEATER_INFO.value:
             result = FloorHeaterQueryResult(cnt, device)
         elif cmd_type == FLOOR_HEATER_NOTIFY_CMD:
             result = FloorHeaterNotifyResult(cnt, device)
@@ -1363,26 +1363,28 @@ class HDControlOtherResult(BaseResult):
 # 分房间地暖温控器（设备类型 10/52）相关的 Result 类
 
 # 网关主动推送状态变化用的指令号（和普通设备的 STATUS_CHANGED = 2 不一样）
-FLOOR_HEATER_NOTIFY_CMD = 1
+FLOOR_HEATER_NOTIFY_CMD = EnumCmdType.FLOOR_HEATER_STATUS_CHANGE.value
 
 
 def _read_floor_heater(d: Decode, config: Config) -> FloorHeater:
-    """读一条温控器记录：房间号、1 字节（恒为 1，含义未知）、网卡地址、若干「标签-长度-值」、0 结束。"""
+    """读一条温控器记录：房间号 + 若干「标签-长度-值」+ 0 结束（和官方 App 的解析一致）。"""
     dev = FloorHeater(config)
     dev.room_id = d.read1()
-    d.read1()
-    dev.mac = d.read(d.read1()).hex()
     status = dev.status
     tag = d.read1()
     while tag != 0:
-        value = int.from_bytes(d.read(d.read1()), "little")
-        status.raw[tag] = value
-        if tag == 2:
-            status.online = value == 1
-        elif tag == 7:
-            status.switch = value == 1
-        elif tag == 8:
-            status.setted_temp = value / 10.0
+        raw = d.read(d.read1())
+        if tag == 1:
+            dev.mac = raw.hex()
+        else:
+            value = int.from_bytes(raw, "little")
+            status.raw[tag] = value
+            if tag == 2:
+                status.online = value == 1
+            elif tag == 7:
+                status.switch = value == 1
+            elif tag == 8:
+                status.setted_temp = value / 10.0
         tag = d.read1()
     return dev
 

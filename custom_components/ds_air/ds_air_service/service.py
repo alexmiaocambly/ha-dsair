@@ -29,6 +29,7 @@ from .display import display
 from .param import (
     AirConControlParam,
     AirConQueryStatusParam,
+    FloorHeaterControlParam,
     FloorHeaterQueryParam,
     HandShakeParam,
     HeartbeatParam,
@@ -376,6 +377,15 @@ class Service:
     def get_floor_heaters(self) -> list[FloorHeater]:
         """获取所有分房间地暖温控器"""
         return self._floor_heaters or []
+
+    def control_floor_heater(
+        self,
+        heater: FloorHeater,
+        switch: bool | None = None,
+        temperature: float | None = None,
+    ):
+        """控制一台地暖温控器：开关、设定温度可以只给一个。网关执行后会推送状态变化。"""
+        self.send_msg(FloorHeaterControlParam(heater.room_id, switch, temperature))
 
     def register_floor_heater_hook(self, device: FloorHeater, hook: Callable):
         """注册地暖温控器状态钩子（状态变了就调，不带参数）"""

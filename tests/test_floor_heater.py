@@ -17,7 +17,7 @@ from ds_air_service.decoder import (  # noqa: E402
     FloorHeaterQueryResult,
     decoder,
 )
-from ds_air_service.param import FloorHeaterQueryParam  # noqa: E402
+from ds_air_service.param import FloorHeaterControlParam, FloorHeaterQueryParam  # noqa: E402
 from ds_air_service.service import Service  # noqa: E402
 
 # 查询全部（子体 ff）的回包：5 台，全部关着，设定温度 24 / 24 / 21 / 21 / 21
@@ -87,10 +87,37 @@ class FloorHeaterParamTests(unittest.TestCase):
 
         self.assertEqual(param.target, EnumDevice.FLOOR_HEATER)
         self.assertEqual(param.cmd_type, EnumCmdType.QUERY_STATUS)
-        # 设备类型 0a、设备编号 34000000、指令 0300、子体 ff
+        # 设备类型 0a、设备编号 34000000、指令 0300、子体是 4 字节的 255（和官方 App 一样）
         self.assertEqual(frame[11:19].hex(), "0a34000000010300")
-        self.assertEqual(frame[19:].hex(), "ff03")
+        self.assertEqual(frame[19:].hex(), "ff00000003")
         self.assertEqual(frame[5], 0)  # 子体版本 0
+
+    def test_query_single_room(self):
+        frame = FloorHeaterQueryParam(3).to_string(make_config())
+        self.assertEqual(frame[19:].hex(), "0300000003")
+
+    # 下面三条的子体和在真实网关上实测生效的报文逐字节相同
+    def test_control_switch_on_frame(self):
+        param = FloorHeaterControlParam(3, switch=True)
+        frame = param.to_string(make_config())
+
+        self.assertEqual(param.cmd_type.value, 2)
+        self.assertFalse(param.has_result)
+        self.assertEqual(frame[11:19].hex(), "0a34000000010200")
+        self.assertEqual(frame[19:].hex(), "030701010003")
+        self.assertEqual(frame[5], 0)
+
+    def test_control_switch_off_frame(self):
+        frame = FloorHeaterControlParam(3, switch=False).to_string(make_config())
+        self.assertEqual(frame[19:].hex(), "030701000003")
+
+    def test_control_temperature_frame(self):
+        frame = FloorHeaterControlParam(3, temperature=21.5).to_string(make_config())
+        self.assertEqual(frame[19:].hex(), "030802d7000003")
+
+    def test_control_does_not_carry_mac_and_can_set_both(self):
+        frame = FloorHeaterControlParam(1, switch=True, temperature=24.0).to_string(make_config())
+        self.assertEqual(frame[19:].hex(), "010701010802f0000003")
 
 
 class FloorHeaterServiceTests(unittest.TestCase):
@@ -141,6 +168,17 @@ class FloorHeaterServiceTests(unittest.TestCase):
 
         self.assertIs(service.get_floor_heaters(), before)
         self.assertIs(before[2].status.switch, False)
+
+    def test_control_sends_by_room_id(self):
+        service = self._service_with_rooms()
+        decoder(QUERY_ALL, service._config)[0].do(service)
+        sent = []
+        service.send_msg = sent.append
+
+        service.control_floor_heater(service.get_floor_heaters()[2], temperature=22.5)
+
+        self.assertEqual(len(sent), 1)
+        self.assertEqual(sent[0].to_string(service._config)[19:].hex(), "030802e1000003")
 
     def test_notify_before_list_is_ignored(self):
         service = self._service_with_rooms()
