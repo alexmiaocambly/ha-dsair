@@ -146,7 +146,9 @@ class DsWaterHeater(WaterHeaterEntity):
             if newstatus.warm_lower is not None:
                 curstatus.warm_lower = newstatus.warm_lower
 
-        self.async_write_ha_state()
+        # 这个回调是在收网关数据的线程里调的，不能直接 async_write_ha_state（HA 会抛异常，
+        # 日志里是 hd hook error，实体就一直停在 unknown）。用线程安全的写法，和 climate.py 一样。
+        self.schedule_update_ha_state()
 
     @property
     def current_temperature(self) -> float | None:
